@@ -341,6 +341,15 @@ const OPS = {
   setFillTransparent: 93,
 };
 
+// In order to have a switch statement that is fast (i.e. which use a jump
+// table), we need to have the OPS in a contiguous range.
+const DrawOPS = {
+  moveTo: 0,
+  lineTo: 1,
+  curveTo: 2,
+  closePath: 3,
+};
+
 const PasswordResponses = {
   NEED_PASSWORD: 1,
   INCORRECT_PASSWORD: 2,
@@ -667,57 +676,6 @@ class Util {
     return `#${hexNumbers[r]}${hexNumbers[g]}${hexNumbers[b]}`;
   }
 
-  // Apply a scaling matrix to some min/max values.
-  // If a scaling factor is negative then min and max must be
-  // swapped.
-  static scaleMinMax(transform, minMax) {
-    let temp;
-    if (transform[0]) {
-      if (transform[0] < 0) {
-        temp = minMax[0];
-        minMax[0] = minMax[2];
-        minMax[2] = temp;
-      }
-      minMax[0] *= transform[0];
-      minMax[2] *= transform[0];
-
-      if (transform[3] < 0) {
-        temp = minMax[1];
-        minMax[1] = minMax[3];
-        minMax[3] = temp;
-      }
-      minMax[1] *= transform[3];
-      minMax[3] *= transform[3];
-    } else {
-      temp = minMax[0];
-      minMax[0] = minMax[1];
-      minMax[1] = temp;
-      temp = minMax[2];
-      minMax[2] = minMax[3];
-      minMax[3] = temp;
-
-      if (transform[1] < 0) {
-        temp = minMax[1];
-        minMax[1] = minMax[3];
-        minMax[3] = temp;
-      }
-      minMax[1] *= transform[1];
-      minMax[3] *= transform[1];
-
-      if (transform[2] < 0) {
-        temp = minMax[0];
-        minMax[0] = minMax[2];
-        minMax[2] = temp;
-      }
-      minMax[0] *= transform[2];
-      minMax[2] *= transform[2];
-    }
-    minMax[0] += transform[4];
-    minMax[1] += transform[5];
-    minMax[2] += transform[4];
-    minMax[3] += transform[5];
-  }
-
   // Concatenates two transformation matrices together and returns the result.
   static transform(m1, m2) {
     return [
@@ -840,6 +798,20 @@ class Util {
     return [xLow, yLow, xHigh, yHigh];
   }
 
+  static pointBoundingBox(x, y, minMax) {
+    minMax[0] = Math.min(minMax[0], x);
+    minMax[1] = Math.min(minMax[1], y);
+    minMax[2] = Math.max(minMax[2], x);
+    minMax[3] = Math.max(minMax[3], y);
+  }
+
+  static rectBoundingBox(x0, y0, x1, y1, minMax) {
+    minMax[0] = Math.min(minMax[0], x0, x1);
+    minMax[1] = Math.min(minMax[1], y0, y1);
+    minMax[2] = Math.max(minMax[2], x0, x1);
+    minMax[3] = Math.max(minMax[3], y0, y1);
+  }
+
   static #getExtremumOnCurve(x0, x1, x2, x3, y0, y1, y2, y3, t, minMax) {
     if (t <= 0 || t >= 1) {
       return;
@@ -908,19 +880,11 @@ class Util {
 
   // From https://github.com/adobe-webplatform/Snap.svg/blob/b365287722a72526000ac4bfcf0ce4cac2faa015/src/path.js#L852
   static bezierBoundingBox(x0, y0, x1, y1, x2, y2, x3, y3, minMax) {
-    if (minMax) {
-      minMax[0] = Math.min(minMax[0], x0, x3);
-      minMax[1] = Math.min(minMax[1], y0, y3);
-      minMax[2] = Math.max(minMax[2], x0, x3);
-      minMax[3] = Math.max(minMax[3], y0, y3);
-    } else {
-      minMax = [
-        Math.min(x0, x3),
-        Math.min(y0, y3),
-        Math.max(x0, x3),
-        Math.max(y0, y3),
-      ];
-    }
+    minMax[0] = Math.min(minMax[0], x0, x3);
+    minMax[1] = Math.min(minMax[1], y0, y3);
+    minMax[2] = Math.max(minMax[2], x0, x3);
+    minMax[3] = Math.max(minMax[3], y0, y3);
+
     this.#getExtremum(
       x0,
       x1,
@@ -949,7 +913,6 @@ class Util {
       3 * (y1 - y0),
       minMax
     );
-    return minMax;
   }
 }
 
@@ -1172,6 +1135,47 @@ if (
   };
 }
 
+// TODO: Remove this once the `javascript.options.experimental.math_sumprecise`
+//       preference is removed from Firefox.
+if (typeof Math.sumPrecise !== "function") {
+  // Note that this isn't a "proper" polyfill, but since we're only using it to
+  // replace `Array.prototype.reduce()` invocations it should be fine.
+  Math.sumPrecise = function (numbers) {
+    return numbers.reduce((a, b) => a + b, 0);
+  };
+}
+
+if (
+  typeof PDFJSDev !== "undefined" &&
+  !PDFJSDev.test("SKIP_BABEL") &&
+  typeof AbortSignal.any !== "function"
+) {
+  AbortSignal.any = function (iterable) {
+    const ac = new AbortController();
+    const { signal } = ac;
+
+    // Return immediately if any of the signals are already aborted.
+    for (const s of iterable) {
+      if (s.aborted) {
+        ac.abort(s.reason);
+        return signal;
+      }
+    }
+    // Register "abort" listeners for all signals.
+    for (const s of iterable) {
+      s.addEventListener(
+        "abort",
+        () => {
+          ac.abort(s.reason);
+        },
+        { signal } // Automatically remove the listener.
+      );
+    }
+
+    return signal;
+  };
+}
+
 export {
   _isValidExplicitDest,
   AbortException,
@@ -1192,6 +1196,7 @@ export {
   bytesToString,
   createValidAbsoluteUrl,
   DocumentActionEventType,
+  DrawOPS,
   FeatureTest,
   FONT_IDENTITY_MATRIX,
   FormatError,
