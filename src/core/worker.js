@@ -558,7 +558,6 @@ class WorkerMessageHandler {
           } else if (
             await _structTreeRoot.canUpdateStructTree({
               pdfManager,
-              xref,
               newAnnotationsByPage,
             })
           ) {
@@ -675,12 +674,12 @@ class WorkerMessageHandler {
         let newXrefInfo = Object.create(null);
         if (xref.trailer) {
           // Get string info from Info in order to compute fileId.
-          const infoObj = Object.create(null);
+          const infoMap = new Map();
           const xrefInfo = xref.trailer.get("Info") || null;
           if (xrefInfo instanceof Dict) {
             for (const [key, value] of xrefInfo) {
               if (typeof value === "string") {
-                infoObj[key] = stringToPDFString(value);
+                infoMap.set(key, stringToPDFString(value));
               }
             }
           }
@@ -690,7 +689,7 @@ class WorkerMessageHandler {
             encryptRef: xref.trailer.getRaw("Encrypt") || null,
             newRef: xref.getNewTemporaryRef(),
             infoRef: xref.trailer.getRaw("Info") || null,
-            info: infoObj,
+            infoMap,
             fileIds: xref.trailer.get("ID") || null,
             startXRef: linearization
               ? startXRef
