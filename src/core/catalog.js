@@ -262,7 +262,7 @@ class Catalog {
   get structTreeRoot() {
     let structTree = null;
     try {
-      structTree = this._readStructTreeRoot();
+      structTree = this.#readStructTreeRoot();
     } catch (ex) {
       if (ex instanceof MissingDataException) {
         throw ex;
@@ -272,17 +272,14 @@ class Catalog {
     return shadow(this, "structTreeRoot", structTree);
   }
 
-  /**
-   * @private
-   */
-  _readStructTreeRoot() {
+  #readStructTreeRoot() {
     const rawObj = this._catDict.getRaw("StructTreeRoot");
     const obj = this.xref.fetchIfRef(rawObj);
     if (!(obj instanceof Dict)) {
       return null;
     }
 
-    const root = new StructTreeRoot(obj, rawObj);
+    const root = new StructTreeRoot(this.xref, obj, rawObj);
     root.init();
     return root;
   }
@@ -1001,9 +998,7 @@ class Catalog {
         warn(`Bad value, for key "${key}", in ViewerPreferences: ${value}.`);
         continue;
       }
-      if (!prefs) {
-        prefs = Object.create(null);
-      }
+      prefs ??= Object.create(null);
       prefs[key] = prefValue;
     }
     return shadow(this, "viewerPreferences", prefs);
@@ -1045,9 +1040,7 @@ class Catalog {
       const nameTree = new NameTree(obj.getRaw("EmbeddedFiles"), this.xref);
       for (const [key, value] of nameTree.getAll()) {
         const fs = new FileSpec(value, this.xref);
-        if (!attachments) {
-          attachments = Object.create(null);
-        }
+        attachments ??= Object.create(null);
         attachments[stringToPDFString(key)] = fs.serializable;
       }
     }
@@ -1061,9 +1054,7 @@ class Catalog {
     if (obj instanceof Dict && obj.has("XFAImages")) {
       const nameTree = new NameTree(obj.getRaw("XFAImages"), this.xref);
       for (const [key, value] of nameTree.getAll()) {
-        if (!xfaImages) {
-          xfaImages = new Dict(this.xref);
-        }
+        xfaImages ??= new Dict(this.xref);
         xfaImages.set(stringToPDFString(key), value);
       }
     }
