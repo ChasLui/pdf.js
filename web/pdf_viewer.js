@@ -32,6 +32,7 @@ import {
   AnnotationEditorType,
   AnnotationEditorUIManager,
   AnnotationMode,
+  MathClamp,
   PermissionFlag,
   PixelsPerInch,
   shadow,
@@ -121,6 +122,9 @@ function isValidAnnotationEditorMode(mode) {
  * @property {number} [maxCanvasDim] - The maximum supported canvas dimension,
  *   in either width or height. Use `-1` for no limit.
  *   The default value is 32767.
+ * @property {number} [capCanvasAreaFactor] - Cap the canvas area to the
+ *   viewport increased by the value in percent. Use `-1` for no limit.
+ *   The default value is 200%.
  * @property {boolean} [enableDetailCanvas] - When enabled, if the rendered
  *   pages would need a canvas that is larger than `maxCanvasPixels` or
  *   `maxCanvasDim`, it will draw a second canvas on top of the CSS-zoomed one,
@@ -137,7 +141,9 @@ function isValidAnnotationEditorMode(mode) {
  * @property {boolean} [supportsPinchToZoom] - Enable zooming on pinch gesture.
  *   The default value is `true`.
  * @property {boolean} [enableAutoLinking] - Enable creation of hyperlinks from
- *   text that look like URLs. The default value is `false`.
+ *   text that look like URLs. The default value is `true`.
+ * @property {number} [minDurationToUpdateCanvas] - Minimum duration to wait
+ *   before updating the canvas. The default value is `500`.
  */
 
 class PDFPageViewBuffer {
@@ -238,9 +244,11 @@ class PDFViewer {
 
   #enableNewAltTextWhenAddingImage = false;
 
-  #enableAutoLinking = false;
+  #enableAutoLinking = true;
 
   #eventAbortController = null;
+
+  #minDurationToUpdateCanvas = 0;
 
   #mlManager = null;
 
@@ -330,6 +338,7 @@ class PDFViewer {
     }
     this.maxCanvasPixels = options.maxCanvasPixels;
     this.maxCanvasDim = options.maxCanvasDim;
+    this.capCanvasAreaFactor = options.capCanvasAreaFactor;
     this.enableDetailCanvas = options.enableDetailCanvas ?? true;
     this.l10n = options.l10n;
     if (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) {
@@ -340,7 +349,8 @@ class PDFViewer {
     this.#mlManager = options.mlManager || null;
     this.#enableHWA = options.enableHWA || false;
     this.#supportsPinchToZoom = options.supportsPinchToZoom !== false;
-    this.#enableAutoLinking = options.enableAutoLinking || false;
+    this.#enableAutoLinking = options.enableAutoLinking !== false;
+    this.#minDurationToUpdateCanvas = options.minDurationToUpdateCanvas ?? 500;
 
     this.defaultRenderingQueue = !options.renderingQueue;
     if (
@@ -711,13 +721,7 @@ class PDFViewer {
           hiddenCapability.resolve();
         }
       },
-      {
-        signal:
-          (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
-          typeof AbortSignal.any === "function"
-            ? AbortSignal.any([signal, ac.signal])
-            : signal,
-      }
+      { signal: AbortSignal.any([signal, ac.signal]) }
     );
 
     await Promise.race([
@@ -914,11 +918,7 @@ class PDFViewer {
           viewer.before(element);
         }
 
-        if (
-          ((typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
-            typeof AbortSignal.any === "function") &&
-          annotationEditorMode !== AnnotationEditorType.DISABLE
-        ) {
+        if (annotationEditorMode !== AnnotationEditorType.DISABLE) {
           const mode = annotationEditorMode;
 
           if (pdfDocument.isPureXfa) {
@@ -1006,12 +1006,14 @@ class PDFViewer {
             imageResourcesPath: this.imageResourcesPath,
             maxCanvasPixels: this.maxCanvasPixels,
             maxCanvasDim: this.maxCanvasDim,
+            capCanvasAreaFactor: this.capCanvasAreaFactor,
             enableDetailCanvas: this.enableDetailCanvas,
             pageColors,
             l10n: this.l10n,
             layerProperties: this._layerProperties,
             enableHWA: this.#enableHWA,
             enableAutoLinking: this.#enableAutoLinking,
+            minDurationToUpdateCanvas: this.#minDurationToUpdateCanvas,
           });
           this._pages.push(pageView);
         }
@@ -2304,7 +2306,7 @@ class PDFViewer {
         newScale = round((newScale * delta).toFixed(2) * 10) / 10;
       } while (--steps > 0);
     }
-    newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+    newScale = MathClamp(newScale, MIN_SCALE, MAX_SCALE);
     this.#setScale(newScale, { noScroll: false, drawingDelay, origin });
   }
 

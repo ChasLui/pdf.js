@@ -2136,6 +2136,13 @@ class PDFWorker {
         );
       };
     }
+
+    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+      this._resetGlobalState = () => {
+        this.#isWorkerDisabled = false;
+        delete globalThis.pdfjsWorker;
+      };
+    }
   }
 
   constructor({
@@ -2416,7 +2423,7 @@ class PDFWorker {
       const worker =
         typeof PDFJSDev === "undefined"
           ? await import("pdfjs/pdf.worker.js")
-          : await __non_webpack_import__(this.workerSrc);
+          : await __raw_import__(this.workerSrc);
       return worker.WorkerMessageHandler;
     };
 

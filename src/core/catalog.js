@@ -76,7 +76,7 @@ function fetchRemoteDest(action) {
       dest = dest.name;
     }
     if (typeof dest === "string") {
-      return stringToPDFString(dest);
+      return stringToPDFString(dest, /* keepEscapeSequence = */ true);
     } else if (isValidExplicitDest(dest)) {
       return JSON.stringify(dest);
     }
@@ -262,7 +262,7 @@ class Catalog {
   get structTreeRoot() {
     let structTree = null;
     try {
-      structTree = this._readStructTreeRoot();
+      structTree = this.#readStructTreeRoot();
     } catch (ex) {
       if (ex instanceof MissingDataException) {
         throw ex;
@@ -272,17 +272,14 @@ class Catalog {
     return shadow(this, "structTreeRoot", structTree);
   }
 
-  /**
-   * @private
-   */
-  _readStructTreeRoot() {
+  #readStructTreeRoot() {
     const rawObj = this._catDict.getRaw("StructTreeRoot");
     const obj = this.xref.fetchIfRef(rawObj);
     if (!(obj instanceof Dict)) {
       return null;
     }
 
-    const root = new StructTreeRoot(obj, rawObj);
+    const root = new StructTreeRoot(this.xref, obj, rawObj);
     root.init();
     return root;
   }
@@ -677,7 +674,8 @@ class Catalog {
         for (const [key, value] of obj.getAll()) {
           const dest = fetchDest(value);
           if (dest) {
-            dests[stringToPDFString(key)] = dest;
+            dests[stringToPDFString(key, /* keepEscapeSequence = */ true)] =
+              dest;
           }
         }
       } else if (obj instanceof Dict) {
@@ -685,7 +683,8 @@ class Catalog {
           const dest = fetchDest(value);
           if (dest) {
             // Always let the NameTree take precedence.
-            dests[key] ||= dest;
+            dests[stringToPDFString(key, /* keepEscapeSequence = */ true)] ||=
+              dest;
           }
         }
       }
@@ -694,6 +693,11 @@ class Catalog {
   }
 
   getDestination(id) {
+    // Avoid extra lookup/parsing when all destinations are already available.
+    if (this.hasOwnProperty("destinations")) {
+      return this.destinations[id] ?? null;
+    }
+
     const rawDests = this.#readDests();
     for (const obj of rawDests) {
       if (obj instanceof NameTree || obj instanceof Dict) {
@@ -704,12 +708,12 @@ class Catalog {
       }
     }
 
-    if (rawDests[0] instanceof NameTree) {
-      // Fallback to checking the *entire* NameTree, in an attempt to handle
-      // corrupt PDF documents with out-of-order NameTrees (fixes issue 10272).
+    // Always fallback to checking all destinations, in order to support:
+    //  - PDF documents with out-of-order NameTrees (fixes issue 10272).
+    //  - Destination keys that use PDFDocEncoding (fixes issue 19835).
+    if (rawDests.length) {
       const dest = this.destinations[id];
       if (dest) {
-        warn(`Found "${id}" at an incorrect position in the NameTree.`);
         return dest;
       }
     }
@@ -1001,9 +1005,7 @@ class Catalog {
         warn(`Bad value, for key "${key}", in ViewerPreferences: ${value}.`);
         continue;
       }
-      if (!prefs) {
-        prefs = Object.create(null);
-      }
+      prefs ??= Object.create(null);
       prefs[key] = prefValue;
     }
     return shadow(this, "viewerPreferences", prefs);
@@ -1027,7 +1029,7 @@ class Catalog {
       } else if (resultObj.action) {
         openAction.action = resultObj.action;
       }
-    } else if (Array.isArray(obj)) {
+    } else if (isValidExplicitDest(obj)) {
       openAction.dest = obj;
     }
     return shadow(
@@ -1045,10 +1047,9 @@ class Catalog {
       const nameTree = new NameTree(obj.getRaw("EmbeddedFiles"), this.xref);
       for (const [key, value] of nameTree.getAll()) {
         const fs = new FileSpec(value, this.xref);
-        if (!attachments) {
-          attachments = Object.create(null);
-        }
-        attachments[stringToPDFString(key)] = fs.serializable;
+        attachments ??= Object.create(null);
+        attachments[stringToPDFString(key, /* keepEscapeSequence = */ true)] =
+          fs.serializable;
       }
     }
     return shadow(this, "attachments", attachments);
@@ -1061,10 +1062,13 @@ class Catalog {
     if (obj instanceof Dict && obj.has("XFAImages")) {
       const nameTree = new NameTree(obj.getRaw("XFAImages"), this.xref);
       for (const [key, value] of nameTree.getAll()) {
-        if (!xfaImages) {
-          xfaImages = new Dict(this.xref);
+        if (value instanceof BaseStream) {
+          xfaImages ??= new Map();
+          xfaImages.set(
+            stringToPDFString(key, /* keepEscapeSequence = */ true),
+            value.getBytes()
+          );
         }
-        xfaImages.set(stringToPDFString(key), value);
       }
     }
     return shadow(this, "xfaImages", xfaImages);
@@ -1088,7 +1092,10 @@ class Catalog {
       } else if (typeof js !== "string") {
         return;
       }
-      js = stringToPDFString(js).replaceAll("\x00", "");
+      js = stringToPDFString(js, /* keepEscapeSequence = */ true).replaceAll(
+        "\x00",
+        ""
+      );
       // Skip empty entries, similar to the `_collectJS` function.
       if (js) {
         (javaScript ||= new Map()).set(name, js);
@@ -1098,7 +1105,10 @@ class Catalog {
     if (obj instanceof Dict && obj.has("JavaScript")) {
       const nameTree = new NameTree(obj.getRaw("JavaScript"), this.xref);
       for (const [key, value] of nameTree.getAll()) {
-        appendIfJavaScriptDict(stringToPDFString(key), value);
+        appendIfJavaScriptDict(
+          stringToPDFString(key, /* keepEscapeSequence = */ true),
+          value
+        );
       }
     }
     // Append OpenAction "JavaScript" actions, if any, to the JavaScript map.
@@ -1616,6 +1626,9 @@ class Catalog {
           // NOTE: the destination is relative to the *remote* document.
           const remoteDest = fetchRemoteDest(action);
           if (remoteDest && typeof url === "string") {
+            // NOTE: We don't use the `updateUrlHash` function here, since
+            // the `createValidAbsoluteUrl` function (see below) already
+            // handles parsing and validation of the final URL.
             url = /* baseUrl = */ url.split("#", 1)[0] + "#" + remoteDest;
           }
           // The 'NewWindow' property, equal to `LinkTarget.BLANK`.
@@ -1634,7 +1647,10 @@ class Catalog {
             const name = target.get("N");
 
             if (isName(relationship, "C") && typeof name === "string") {
-              attachment = docAttachments[stringToPDFString(name)];
+              attachment =
+                docAttachments[
+                  stringToPDFString(name, /* keepEscapeSequence = */ true)
+                ];
             }
           }
 
@@ -1700,7 +1716,11 @@ class Catalog {
             js = jsAction;
           }
 
-          const jsURL = js && recoverJsURL(stringToPDFString(js));
+          const jsURL =
+            js &&
+            recoverJsURL(
+              stringToPDFString(js, /* keepEscapeSequence = */ true)
+            );
           if (jsURL) {
             url = jsURL.url;
             resultObj.newWindow = jsURL.newWindow;
@@ -1736,7 +1756,10 @@ class Catalog {
         dest = dest.name;
       }
       if (typeof dest === "string") {
-        resultObj.dest = stringToPDFString(dest);
+        resultObj.dest = stringToPDFString(
+          dest,
+          /* keepEscapeSequence = */ true
+        );
       } else if (isValidExplicitDest(dest)) {
         resultObj.dest = dest;
       }

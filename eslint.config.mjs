@@ -76,7 +76,7 @@ export default [
       globals: {
         ...globals.worker,
         PDFJSDev: "readonly",
-        __non_webpack_import__: "readonly",
+        __raw_import__: "readonly",
       },
 
       ecmaVersion: 2025,
@@ -127,6 +127,7 @@ export default [
       "perfectionist/sort-named-exports": "error",
       "unicorn/no-abusive-eslint-disable": "error",
       "unicorn/no-array-push-push": "error",
+      "unicorn/no-array-reduce": ["error", { allowSimpleOperations: true }],
       "unicorn/no-console-spaces": "error",
       "unicorn/no-instanceof-builtins": "error",
       "unicorn/no-invalid-remove-event-listener": "error",
@@ -303,8 +304,23 @@ export default [
           message: "Use `Name.get()` rather than `new Name()`.",
         },
         {
+          selector: "NewExpression[callee.name='ObjectLoader']",
+          message:
+            "Use `ObjectLoader.load()` rather than `new ObjectLoader()`.",
+        },
+        {
           selector: "NewExpression[callee.name='Ref']",
           message: "Use `Ref.get()` rather than `new Ref()`.",
+        },
+        {
+          selector: "ExportNamedDeclaration[declaration]",
+          message:
+            "Separate the declaration and the export statement, using `export { ... }`.",
+        },
+        {
+          selector: "ExportDefaultDeclaration:has(> :declaration)",
+          message:
+            "Separate the declaration and the export statement, using `export default <variable name>`.",
         },
       ],
       "no-unneeded-ternary": "error",
